@@ -30,14 +30,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text file containing one symbol per line.",
     )
     parser.add_argument("--limit-universe", type=int)
+    parser.add_argument("--fast-window", type=int, default=50)
+    parser.add_argument("--slow-window", type=int, default=200)
+    parser.add_argument(
+        "--ma-type",
+        choices=["sma", "ema"],
+        default="sma",
+        help="Moving average type for the golden cross.",
+    )
     parser.add_argument("--cross-lookback", type=int, default=5)
     parser.add_argument("--volume-window", type=int, default=20)
-    parser.add_argument("--volume-multiplier", type=float, default=1.5)
+    parser.add_argument(
+        "--volume-spike-lookback",
+        type=int,
+        default=3,
+        help="Recent bars to inspect for a qualifying volume spike.",
+    )
+    parser.add_argument(
+        "--volume-spike-pct",
+        type=float,
+        default=50.0,
+        help="Target percent volume spike versus trailing average volume.",
+    )
+    parser.add_argument("--volume-multiplier", type=float, help=argparse.SUPPRESS)
     parser.add_argument(
         "--support-lookback",
         type=int,
         default=90,
         help="Bars to inspect for the most recent support pivot.",
+    )
+    parser.add_argument(
+        "--support-modes",
+        default="pivot,recent_low,1_month_low",
+        help=(
+            "Comma-separated support methods: pivot, recent_low, 1_month_low, "
+            "3_month_low, 6_month_low, 1_year_low."
+        ),
+    )
+    parser.add_argument(
+        "--support-lookbacks",
+        default="",
+        help="Comma-separated custom low lookbacks, for example 21,63,126.",
     )
     parser.add_argument(
         "--support-pivot-span",
@@ -72,11 +105,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     config = ScreenConfig(
+        fast_window=args.fast_window,
+        slow_window=args.slow_window,
+        ma_type=args.ma_type,
         crossover_lookback=args.cross_lookback,
         volume_window=args.volume_window,
-        volume_multiplier=args.volume_multiplier,
+        volume_spike_lookback=args.volume_spike_lookback,
+        volume_spike_pct=_volume_spike_pct(args),
         support_lookback=args.support_lookback,
         support_pivot_span=args.support_pivot_span,
+        support_modes=_parse_csv(args.support_modes),
+        support_lookbacks=tuple(int(item) for item in _parse_csv(args.support_lookbacks)),
         min_price=args.min_price,
         min_average_volume=args.min_average_volume,
     )
@@ -113,6 +152,16 @@ def _write_results(results: object, path: Path) -> None:
         results.to_csv(path, index=False)
     else:
         raise ValueError("--output must end in .csv or .json")
+
+
+def _parse_csv(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _volume_spike_pct(args: argparse.Namespace) -> float:
+    if args.volume_multiplier is not None:
+        return (args.volume_multiplier - 1.0) * 100.0
+    return args.volume_spike_pct
 
 
 if __name__ == "__main__":
