@@ -63,6 +63,19 @@ alpaca-golden-cross `
 
 Use `--feed sip` only when the Alpaca account has SIP data access.
 
+## Notebook
+
+You can also run the full screener from Jupyter:
+
+```powershell
+pip install -e ".[notebook]"
+jupyter notebook notebooks/alpaca_golden_cross_screener.ipynb
+```
+
+The notebook loads `.env`, lets you configure the watchlist or full universe,
+runs the same package code as the CLI, saves CSV/JSON output to `outputs/`, and
+includes an optional chart for the closest-to-support match.
+
 ## Output
 
 Results are sorted by distance to support from closest to furthest. Support is

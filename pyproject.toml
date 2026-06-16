@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
+notebook = ["ipykernel>=6.29.0", "matplotlib>=3.8.0"]
 
 [project.scripts]
 alpaca-golden-cross = "alpaca_screener.cli:main"
@@ -25,4 +26,3 @@ include = ["alpaca_screener*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
