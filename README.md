@@ -85,6 +85,10 @@ The notebook loads `.env`, lets you configure the watchlist or full universe,
 runs the same package code as the CLI, saves CSV/JSON output to `outputs/`, and
 includes an optional chart for the closest-to-support match.
 
+If you pull strategy updates while the notebook is already open, restart the
+kernel or rerun the Setup cell before running the configuration cell. The Setup
+cell forces Jupyter to load the local checkout instead of a stale imported copy.
+
 ## Output
 
 Results are sorted by distance to support from closest to furthest. The screener

@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 notebooks/.ipynb_checkpoints/
+work/
 dist/
 build/
 *.egg-info/
