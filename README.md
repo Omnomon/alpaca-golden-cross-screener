@@ -27,7 +27,7 @@ Python 3.10 or newer is required.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+pip install -e ".[dev,fundamentals]"
 Copy-Item .env.example .env
 ```
 
@@ -57,6 +57,12 @@ Use a symbol file and stricter confirmation:
 ```powershell
 alpaca-golden-cross `
   --symbols-file symbols.txt `
+  --pe-max 35 `
+  --industries Semiconductors,Technology `
+  --market-caps mid,large `
+  --cap-mix mid:40,large:60 `
+  --min-30d-dollar-volume 500000000 `
+  --max-filtered-symbols 100 `
   --fast-window 21 `
   --slow-window 50 `
   --ma-type ema `
@@ -72,12 +78,27 @@ alpaca-golden-cross `
 
 Use `--feed sip` only when the Alpaca account has SIP data access.
 
+Fundamental filters use `yfinance` because Alpaca bars/assets data does not
+include P/E, market cap, or industry. Thirty-day traded volume is calculated
+from Alpaca daily bars before the full strategy fetch.
+
+Universe filters:
+
+- `--pe-min`, `--pe-max`: trailing P/E range.
+- `--industries`: comma-separated industry or sector names.
+- `--market-caps`: include cap buckets: `small`, `mid`/`medium`, `large`.
+- `--cap-mix`: select a target filtered-universe mix, for example
+  `small:20,mid:30,large:50`.
+- `--min-30d-share-volume`: minimum shares traded over the last 30 bars.
+- `--min-30d-dollar-volume`: minimum dollar volume over the last 30 bars.
+- `--max-filtered-symbols`: cap the filtered universe before full screening.
+
 ## Notebook
 
 You can also run the full screener from Jupyter:
 
 ```powershell
-pip install -e ".[notebook]"
+pip install -e ".[notebook,fundamentals]"
 jupyter notebook notebooks/alpaca_golden_cross_screener.ipynb
 ```
 

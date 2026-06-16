@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
-notebook = ["ipykernel>=6.29.0", "matplotlib>=3.8.0"]
+fundamentals = ["yfinance>=0.2.40"]
+notebook = ["ipykernel>=6.29.0", "matplotlib>=3.8.0", "yfinance>=0.2.40"]
 
 [project.scripts]
 alpaca-golden-cross = "alpaca_screener.cli:main"

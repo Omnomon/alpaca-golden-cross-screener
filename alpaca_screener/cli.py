@@ -13,6 +13,12 @@ from .alpaca_data import (
     get_tradable_symbols,
 )
 from .strategy import ScreenConfig, screen_bars
+from .universe import (
+    UniverseFilterConfig,
+    fetch_yfinance_fundamentals,
+    filter_universe,
+    volume_stats_from_bars,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +36,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text file containing one symbol per line.",
     )
     parser.add_argument("--limit-universe", type=int)
+    parser.add_argument("--pe-min", type=float)
+    parser.add_argument("--pe-max", type=float)
+    parser.add_argument(
+        "--industries",
+        default="",
+        help="Comma-separated industries or sectors to include.",
+    )
+    parser.add_argument(
+        "--market-caps",
+        default="",
+        help="Comma-separated cap buckets to include: small,mid,medium,large.",
+    )
+    parser.add_argument(
+        "--cap-mix",
+        default="",
+        help="Target cap bucket percentages, for example small:20,mid:30,large:50.",
+    )
+    parser.add_argument("--min-30d-share-volume", type=float)
+    parser.add_argument("--min-30d-dollar-volume", type=float)
+    parser.add_argument(
+        "--max-filtered-symbols",
+        type=int,
+        help="Cap the filtered universe before fetching full strategy bars.",
+    )
     parser.add_argument("--fast-window", type=int, default=50)
     parser.add_argument("--slow-window", type=int, default=200)
     parser.add_argument(
@@ -93,7 +123,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data_client, trading_client = clients_from_environment()
         symbols = _load_symbols(args, trading_client)
+        universe_config = UniverseFilterConfig(
+            pe_min=args.pe_min,
+            pe_max=args.pe_max,
+            industries=_parse_csv(args.industries),
+            market_caps=_parse_csv(args.market_caps),
+            cap_mix=_parse_cap_mix(args.cap_mix),
+            min_30d_share_volume=args.min_30d_share_volume,
+            min_30d_dollar_volume=args.min_30d_dollar_volume,
+            max_symbols=args.max_filtered_symbols,
+        )
         clock = trading_client.get_clock()
+        symbols = _filter_symbols(
+            data_client,
+            symbols,
+            universe_config,
+            feed=DataFeed.SIP if args.feed == "sip" else DataFeed.IEX,
+            incomplete_session_date=clock.timestamp.date() if clock.is_open else None,
+        )
         bars = fetch_daily_bars(
             data_client,
             symbols,
@@ -158,10 +205,52 @@ def _parse_csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _parse_cap_mix(value: str) -> dict[str, float]:
+    cap_mix: dict[str, float] = {}
+    for item in _parse_csv(value):
+        if ":" not in item:
+            raise ValueError("--cap-mix entries must look like small:20")
+        bucket, pct = item.split(":", 1)
+        cap_mix[bucket.strip().lower()] = float(pct)
+    return cap_mix
+
+
 def _volume_spike_pct(args: argparse.Namespace) -> float:
     if args.volume_multiplier is not None:
         return (args.volume_multiplier - 1.0) * 100.0
     return args.volume_spike_pct
+
+
+def _filter_symbols(
+    data_client: object,
+    symbols: list[str],
+    config: UniverseFilterConfig,
+    *,
+    feed: DataFeed,
+    incomplete_session_date: object,
+) -> list[str]:
+    if not (config.needs_fundamentals or config.needs_volume or config.max_symbols):
+        return symbols
+
+    fundamentals = (
+        fetch_yfinance_fundamentals(symbols) if config.needs_fundamentals else None
+    )
+    volume_stats = None
+    if config.needs_volume:
+        volume_bars = fetch_daily_bars(
+            data_client,
+            symbols,
+            calendar_days=50,
+            feed=feed,
+            incomplete_session_date=incomplete_session_date,
+        )
+        volume_stats = volume_stats_from_bars(volume_bars)
+    return filter_universe(
+        symbols,
+        config,
+        fundamentals=fundamentals,
+        volume_stats=volume_stats,
+    )
 
 
 if __name__ == "__main__":
