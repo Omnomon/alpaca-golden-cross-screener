@@ -15,8 +15,9 @@ from .alpaca_data import (
 from .strategy import ScreenConfig, screen_bars
 from .universe import (
     UniverseFilterConfig,
-    fetch_yfinance_fundamentals,
     filter_universe,
+    is_common_stock_symbol,
+    load_fundamentals_file,
     volume_stats_from_bars,
 )
 
@@ -36,6 +37,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text file containing one symbol per line.",
     )
     parser.add_argument("--limit-universe", type=int)
+    parser.add_argument(
+        "--include-non-common",
+        action="store_true",
+        help="Include preferred shares, warrants, and units in the base universe.",
+    )
+    parser.add_argument(
+        "--fundamentals-file",
+        type=Path,
+        help=(
+            "CSV with symbol, pe, market_cap, industry, and/or sector columns. "
+            "Required for P/E, cap, cap-mix, or industry filters."
+        ),
+    )
     parser.add_argument("--pe-min", type=float)
     parser.add_argument("--pe-max", type=float)
     parser.add_argument(
@@ -123,7 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data_client, trading_client = clients_from_environment()
         symbols = _load_symbols(args, trading_client)
+        if not args.include_non_common:
+            symbols = [symbol for symbol in symbols if is_common_stock_symbol(symbol)]
         universe_config = UniverseFilterConfig(
+            fundamentals_file=str(args.fundamentals_file) if args.fundamentals_file else None,
             pe_min=args.pe_min,
             pe_max=args.pe_max,
             industries=_parse_csv(args.industries),
@@ -188,7 +205,11 @@ def _load_symbols(args: argparse.Namespace, trading_client: object) -> list[str]
             for line in args.symbols_file.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-    return get_tradable_symbols(trading_client, args.limit_universe)
+    return get_tradable_symbols(
+        trading_client,
+        args.limit_universe,
+        common_only=not args.include_non_common,
+    )
 
 
 def _write_results(results: object, path: Path) -> None:
@@ -232,9 +253,14 @@ def _filter_symbols(
     if not (config.needs_fundamentals or config.needs_volume or config.max_symbols):
         return symbols
 
-    fundamentals = (
-        fetch_yfinance_fundamentals(symbols) if config.needs_fundamentals else None
-    )
+    fundamentals = None
+    if config.needs_fundamentals:
+        if not getattr(config, "fundamentals_file", None):
+            raise RuntimeError(
+                "P/E, market-cap, cap-mix, and industry filters require "
+                "--fundamentals-file. This avoids Yahoo/yfinance rate limits."
+            )
+        fundamentals = load_fundamentals_file(str(config.fundamentals_file))
     volume_stats = None
     if config.needs_volume:
         volume_bars = fetch_daily_bars(

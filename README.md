@@ -27,7 +27,7 @@ Python 3.10 or newer is required.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev,fundamentals]"
+pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
@@ -57,6 +57,7 @@ Use a symbol file and stricter confirmation:
 ```powershell
 alpaca-golden-cross `
   --symbols-file symbols.txt `
+  --fundamentals-file data/fundamentals.csv `
   --pe-max 35 `
   --industries Semiconductors,Technology `
   --market-caps mid,large `
@@ -78,9 +79,18 @@ alpaca-golden-cross `
 
 Use `--feed sip` only when the Alpaca account has SIP data access.
 
-Fundamental filters use `yfinance` because Alpaca bars/assets data does not
-include P/E, market cap, or industry. Thirty-day traded volume is calculated
-from Alpaca daily bars before the full strategy fetch.
+Alpaca bars/assets data does not include P/E, market cap, or industry, and this
+project intentionally avoids per-symbol `yfinance` calls because they rate limit
+quickly and return noisy blanks for preferred shares and warrants. Fundamental
+filters use a local CSV supplied with `--fundamentals-file`; thirty-day traded
+volume is calculated from Alpaca daily bars before the full strategy fetch.
+
+Fundamentals CSV columns:
+
+- Required: `symbol`.
+- Optional: `pe`, `market_cap`, `industry`, `sector`, `market_cap_bucket`.
+- Accepted aliases include `ticker`, `pe_ratio`, `trailing_pe`, `forward_pe`,
+  `marketCap`, `market_capitalization`, and `cap_bucket`.
 
 Universe filters:
 
@@ -92,13 +102,15 @@ Universe filters:
 - `--min-30d-share-volume`: minimum shares traded over the last 30 bars.
 - `--min-30d-dollar-volume`: minimum dollar volume over the last 30 bars.
 - `--max-filtered-symbols`: cap the filtered universe before full screening.
+- `--include-non-common`: include preferred shares, warrants, and units. By
+  default these are excluded to avoid symbols such as `ABR.PRD` and `ACHR.WS`.
 
 ## Notebook
 
 You can also run the full screener from Jupyter:
 
 ```powershell
-pip install -e ".[notebook,fundamentals]"
+pip install -e ".[notebook]"
 jupyter notebook notebooks/alpaca_golden_cross_screener.ipynb
 ```
 

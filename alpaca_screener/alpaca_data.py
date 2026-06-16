@@ -13,6 +13,8 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetClass, AssetStatus
 from alpaca.trading.requests import GetAssetsRequest
 
+from .universe import is_common_stock_symbol
+
 
 def clients_from_environment() -> tuple[StockHistoricalDataClient, TradingClient]:
     key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_KEY")
@@ -27,6 +29,7 @@ def clients_from_environment() -> tuple[StockHistoricalDataClient, TradingClient
 def get_tradable_symbols(
     trading_client: TradingClient,
     limit: int | None = None,
+    common_only: bool = True,
 ) -> list[str]:
     request = GetAssetsRequest(
         status=AssetStatus.ACTIVE,
@@ -35,7 +38,10 @@ def get_tradable_symbols(
     symbols = sorted(
         asset.symbol
         for asset in trading_client.get_all_assets(request)
-        if asset.tradable and asset.exchange and asset.symbol.isascii()
+        if asset.tradable
+        and asset.exchange
+        and asset.symbol.isascii()
+        and (not common_only or is_common_stock_symbol(asset.symbol))
     )
     return symbols[:limit] if limit else symbols
 

@@ -3,6 +3,8 @@ import pandas as pd
 from alpaca_screener.universe import (
     UniverseFilterConfig,
     filter_universe,
+    is_common_stock_symbol,
+    load_fundamentals_file,
     market_cap_bucket,
     volume_stats_from_bars,
 )
@@ -43,6 +45,28 @@ def test_market_cap_bucket():
     assert market_cap_bucket(1_000_000_000) == "small"
     assert market_cap_bucket(5_000_000_000) == "mid"
     assert market_cap_bucket(50_000_000_000) == "large"
+
+
+def test_common_stock_symbol_filter_excludes_preferreds_and_warrants():
+    assert is_common_stock_symbol("AAPL")
+    assert not is_common_stock_symbol("ABR.PRD")
+    assert not is_common_stock_symbol("ACHR.WS")
+    assert not is_common_stock_symbol("XYZ.U")
+
+
+def test_load_fundamentals_file_normalizes_aliases(tmp_path):
+    path = tmp_path / "fundamentals.csv"
+    path.write_text(
+        "ticker,pe_ratio,marketCap,sector\n"
+        "AAA,18,5000000000,Technology\n",
+        encoding="utf-8",
+    )
+
+    frame = load_fundamentals_file(str(path))
+
+    assert frame.loc[0, "symbol"] == "AAA"
+    assert frame.loc[0, "pe"] == 18
+    assert frame.loc[0, "market_cap_bucket"] == "mid"
 
 
 def test_filter_by_pe_industry_and_cap_bucket():

@@ -13,8 +13,16 @@ CAP_BUCKETS = {
 CAP_ALIASES = {"medium": "mid"}
 
 
+def is_common_stock_symbol(symbol: str) -> bool:
+    normalized = symbol.upper()
+    if any(token in normalized for token in (".PR", "-P", ".WS", ".WT", ".U")):
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class UniverseFilterConfig:
+    fundamentals_file: str | None = None
     pe_min: float | None = None
     pe_max: float | None = None
     industries: tuple[str, ...] = field(default_factory=tuple)
@@ -45,39 +53,33 @@ class UniverseFilterConfig:
         )
 
 
-def fetch_yfinance_fundamentals(symbols: list[str]) -> pd.DataFrame:
-    try:
-        import yfinance as yf
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Fundamental filters require yfinance. Install with: "
-            'pip install -e ".[fundamentals]"'
-        ) from exc
+def load_fundamentals_file(path: str) -> pd.DataFrame:
+    frame = pd.read_csv(path)
+    frame = frame.rename(columns={column: _normalize_column(column) for column in frame})
+    required = {"symbol"}
+    if not required.issubset(frame.columns):
+        raise ValueError("Fundamentals file must include a symbol column.")
 
-    rows: list[dict[str, object]] = []
-    for symbol in symbols:
-        ticker = yf.Ticker(symbol)
-        fast_info = ticker.fast_info
-        slow_info = ticker.info
-        market_cap = _first_number(
-            _get(fast_info, "market_cap"),
-            slow_info.get("marketCap"),
+    output = pd.DataFrame()
+    output["symbol"] = frame["symbol"].astype(str).str.upper().str.strip()
+    output["pe"] = pd.to_numeric(_optional_column(frame, "pe"), errors="coerce")
+    output["market_cap"] = pd.to_numeric(
+        _optional_column(frame, "market_cap"), errors="coerce"
+    )
+    output["industry"] = _optional_column(frame, "industry").astype("string")
+    output["sector"] = _optional_column(frame, "sector").astype("string")
+    output["market_cap_bucket"] = output["market_cap"].apply(market_cap_bucket)
+
+    if "market_cap_bucket" in frame.columns:
+        output["market_cap_bucket"] = (
+            frame["market_cap_bucket"]
+            .astype("string")
+            .str.lower()
+            .map(lambda value: _normalize_cap_bucket(value) if pd.notna(value) else None)
+            .fillna(output["market_cap_bucket"])
         )
-        trailing_pe = _first_number(
-            slow_info.get("trailingPE"),
-            slow_info.get("forwardPE"),
-        )
-        rows.append(
-            {
-                "symbol": symbol,
-                "pe": trailing_pe,
-                "market_cap": market_cap,
-                "market_cap_bucket": market_cap_bucket(market_cap),
-                "industry": slow_info.get("industry"),
-                "sector": slow_info.get("sector"),
-            }
-        )
-    return pd.DataFrame(rows)
+
+    return output.drop_duplicates("symbol")
 
 
 def filter_universe(
@@ -114,13 +116,6 @@ def market_cap_bucket(market_cap: float | None) -> str | None:
         if lower <= market_cap < upper:
             return bucket
     return None
-
-
-def _get(mapping: object, key: str) -> object:
-    try:
-        return mapping.get(key)  # type: ignore[attr-defined]
-    except (AttributeError, KeyError):
-        return None
 
 
 def volume_stats_from_bars(
@@ -224,3 +219,24 @@ def _first_number(*values: object) -> float | None:
 def _normalize_cap_bucket(value: str) -> str:
     normalized = value.strip().lower()
     return CAP_ALIASES.get(normalized, normalized)
+
+
+def _normalize_column(column: str) -> str:
+    normalized = column.strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "ticker": "symbol",
+        "pe_ratio": "pe",
+        "trailing_pe": "pe",
+        "forward_pe": "pe",
+        "marketcap": "market_cap",
+        "market_capitalization": "market_cap",
+        "cap": "market_cap",
+        "cap_bucket": "market_cap_bucket",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _optional_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column in frame.columns:
+        return frame[column]
+    return pd.Series([None] * len(frame), index=frame.index)
