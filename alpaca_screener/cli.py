@@ -33,6 +33,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cross-lookback", type=int, default=5)
     parser.add_argument("--volume-window", type=int, default=20)
     parser.add_argument("--volume-multiplier", type=float, default=1.5)
+    parser.add_argument(
+        "--support-lookback",
+        type=int,
+        default=90,
+        help="Bars to inspect for the most recent support pivot.",
+    )
+    parser.add_argument(
+        "--support-pivot-span",
+        type=int,
+        default=3,
+        help="Bars required on each side of a local support pivot.",
+    )
     parser.add_argument("--min-price", type=float, default=5.0)
     parser.add_argument("--min-average-volume", type=float, default=100_000.0)
     parser.add_argument("--feed", choices=["iex", "sip"], default="iex")
@@ -63,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         crossover_lookback=args.cross_lookback,
         volume_window=args.volume_window,
         volume_multiplier=args.volume_multiplier,
+        support_lookback=args.support_lookback,
+        support_pivot_span=args.support_pivot_span,
         min_price=args.min_price,
         min_average_volume=args.min_average_volume,
     )

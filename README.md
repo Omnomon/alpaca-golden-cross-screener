@@ -10,7 +10,8 @@ It finds stocks where:
    within the last `N` completed bars.
 2. The latest volume is at least `1.5x` the average of the previous 20 bars.
 3. The bullish 50/200 alignment is still intact.
-4. Basic price and average-volume liquidity filters pass.
+4. The most recent support level is calculated from recent pivot lows.
+5. Basic price and average-volume liquidity filters pass.
 
 The volume baseline excludes the current bar so the spike does not inflate its
 own comparison. When Alpaca reports that the market is open, the current
@@ -55,6 +56,7 @@ alpaca-golden-cross `
   --symbols-file symbols.txt `
   --cross-lookback 3 `
   --volume-multiplier 2.0 `
+  --support-lookback 120 `
   --min-average-volume 500000 `
   --output outputs/screen-results.json
 ```
@@ -63,14 +65,18 @@ Use `--feed sip` only when the Alpaca account has SIP data access.
 
 ## Output
 
-Results are ranked by a transparent score favoring:
+Results are sorted by distance to support from closest to furthest. Support is
+defined as the latest local pivot low in the configured lookback window. If no
+pivot low is available, the screener falls back to the lowest low in that
+window.
 
-- Larger volume spikes.
-- More recent crossovers.
-- A close farther above the 200-day SMA.
+The `score` column is still included as a secondary context field favoring
+larger volume spikes, more recent crossovers, and stronger separation above the
+200-day SMA.
 
 Important fields include `cross_date`, `sessions_since_cross`,
-`volume_ratio`, and `price_above_slow_pct`.
+`volume_ratio`, `support`, `support_date`, `distance_to_support_pct`, and
+`price_above_slow_pct`.
 
 ## Notes
 
