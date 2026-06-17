@@ -52,6 +52,9 @@ Screen all active, tradable US equities:
 alpaca-golden-cross --top 25 --output outputs/screen-results.csv
 ```
 
+By default, the generated universe is limited to active tradable NASDAQ and
+NYSE common stocks.
+
 Use a symbol file and stricter confirmation:
 
 ```powershell
@@ -113,6 +116,8 @@ Universe filters:
 - `--max-filtered-symbols`: cap the filtered universe before full screening.
 - `--include-non-common`: include preferred shares, warrants, and units. By
   default these are excluded to avoid symbols such as `ABR.PRD` and `ACHR.WS`.
+- `--exchanges`: Alpaca exchange list for generated universes. Defaults to
+  `NASDAQ,NYSE`.
 
 ## Notebook
 

@@ -8,6 +8,7 @@ from alpaca.data.enums import DataFeed
 from dotenv import load_dotenv
 
 from .alpaca_data import (
+    DEFAULT_EXCHANGES,
     clients_from_environment,
     fetch_daily_bars,
     get_tradable_symbols,
@@ -37,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text file containing one symbol per line.",
     )
     parser.add_argument("--limit-universe", type=int)
+    parser.add_argument(
+        "--exchanges",
+        default=",".join(DEFAULT_EXCHANGES),
+        help="Comma-separated Alpaca exchanges to include. Defaults to NASDAQ,NYSE.",
+    )
     parser.add_argument(
         "--include-non-common",
         action="store_true",
@@ -227,6 +233,7 @@ def _load_symbols(args: argparse.Namespace, trading_client: object) -> list[str]
         trading_client,
         args.limit_universe,
         common_only=not args.include_non_common,
+        exchanges=_parse_csv(args.exchanges),
     )
 
 

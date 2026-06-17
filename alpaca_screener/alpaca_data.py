@@ -3,20 +3,24 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import pandas as pd
-from alpaca.data.enums import DataFeed
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import AssetClass, AssetStatus
-from alpaca.trading.requests import GetAssetsRequest
 
 from .universe import is_common_stock_symbol
 
+if TYPE_CHECKING:
+    from alpaca.data.enums import DataFeed
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.trading.client import TradingClient
 
-def clients_from_environment() -> tuple[StockHistoricalDataClient, TradingClient]:
+DEFAULT_EXCHANGES = ("NASDAQ", "NYSE")
+
+
+def clients_from_environment() -> tuple["StockHistoricalDataClient", "TradingClient"]:
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.trading.client import TradingClient
+
     key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_KEY")
     secret = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET")
     if not key or not secret:
@@ -27,10 +31,14 @@ def clients_from_environment() -> tuple[StockHistoricalDataClient, TradingClient
 
 
 def get_tradable_symbols(
-    trading_client: TradingClient,
+    trading_client: "TradingClient",
     limit: int | None = None,
     common_only: bool = True,
+    exchanges: tuple[str, ...] = DEFAULT_EXCHANGES,
 ) -> list[str]:
+    from alpaca.trading.enums import AssetClass, AssetStatus
+    from alpaca.trading.requests import GetAssetsRequest
+
     request = GetAssetsRequest(
         status=AssetStatus.ACTIVE,
         asset_class=AssetClass.US_EQUITY,
@@ -38,12 +46,27 @@ def get_tradable_symbols(
     symbols = sorted(
         asset.symbol
         for asset in trading_client.get_all_assets(request)
-        if asset.tradable
-        and asset.exchange
-        and asset.symbol.isascii()
-        and (not common_only or is_common_stock_symbol(asset.symbol))
+        if _include_asset(asset, common_only=common_only, exchanges=exchanges)
     )
     return symbols[:limit] if limit else symbols
+
+
+def _include_asset(
+    asset: object,
+    *,
+    common_only: bool,
+    exchanges: tuple[str, ...],
+) -> bool:
+    symbol = getattr(asset, "symbol", "")
+    exchange = str(getattr(asset, "exchange", "") or "").upper()
+    allowed_exchanges = {item.upper() for item in exchanges}
+    return (
+        bool(getattr(asset, "tradable", False))
+        and bool(exchange)
+        and symbol.isascii()
+        and (not allowed_exchanges or exchange in allowed_exchanges)
+        and (not common_only or is_common_stock_symbol(symbol))
+    )
 
 
 def fetch_daily_bars(
@@ -52,9 +75,15 @@ def fetch_daily_bars(
     *,
     calendar_days: int = 420,
     batch_size: int = 200,
-    feed: DataFeed = DataFeed.IEX,
+    feed: "DataFeed | None" = None,
     incomplete_session_date: date | None = None,
 ) -> dict[str, pd.DataFrame]:
+    from alpaca.data.enums import DataFeed
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    if feed is None:
+        feed = DataFeed.IEX
     symbol_list = list(dict.fromkeys(symbol.upper() for symbol in symbols))
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=calendar_days)
