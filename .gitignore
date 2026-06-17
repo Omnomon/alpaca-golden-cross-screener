@@ -3,7 +3,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-notebooks/.ipynb_checkpoints/
+**/.ipynb_checkpoints/
 work/
 dist/
 build/
