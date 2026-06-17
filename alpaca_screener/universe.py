@@ -11,6 +11,7 @@ CAP_BUCKETS = {
     "large": (10_000_000_000, float("inf")),
 }
 CAP_ALIASES = {"medium": "mid"}
+PERFORMANCE_WINDOWS = {"1m": 21, "3m": 63, "6m": 126}
 
 
 def is_common_stock_symbol(symbol: str) -> bool:
@@ -30,6 +31,9 @@ class UniverseFilterConfig:
     cap_mix: dict[str, float] = field(default_factory=dict)
     min_30d_share_volume: float | None = None
     min_30d_dollar_volume: float | None = None
+    performance_windows: tuple[str, ...] = field(default_factory=tuple)
+    top_performance_pct: float | None = None
+    min_performance: dict[str, float] = field(default_factory=dict)
     max_symbols: int | None = None
 
     @property
@@ -51,6 +55,10 @@ class UniverseFilterConfig:
             or self.min_30d_dollar_volume is not None
             or bool(self.cap_mix)
         )
+
+    @property
+    def needs_performance(self) -> bool:
+        return bool(self.performance_windows or self.min_performance)
 
 
 def load_fundamentals_file(path: str) -> pd.DataFrame:
@@ -98,6 +106,7 @@ def filter_universe(
     if volume_stats is not None and not volume_stats.empty:
         frame = frame.merge(volume_stats, on="symbol", how="left")
         frame = _filter_volume(frame, config)
+        frame = _filter_performance(frame, config)
 
     if config.cap_mix and "market_cap_bucket" in frame.columns:
         frame = _apply_cap_mix(frame, config.cap_mix, config.max_symbols)
@@ -129,14 +138,28 @@ def volume_stats_from_bars(
         recent = bars.sort_index().tail(lookback)
         share_volume = float(recent["volume"].sum())
         dollar_volume = float((recent["close"] * recent["volume"]).sum())
+        performance = performance_from_bars(bars)
         rows.append(
             {
                 "symbol": symbol,
                 "share_volume_30d": share_volume,
                 "dollar_volume_30d": dollar_volume,
+                **performance,
             }
         )
     return pd.DataFrame(rows)
+
+
+def performance_from_bars(bars: pd.DataFrame) -> dict[str, float | None]:
+    output: dict[str, float | None] = {}
+    closes = bars.sort_index()["close"].dropna()
+    for label, sessions in PERFORMANCE_WINDOWS.items():
+        column = f"performance_{label}_pct"
+        if len(closes) <= sessions or closes.iloc[-sessions - 1] <= 0:
+            output[column] = None
+            continue
+        output[column] = float((closes.iloc[-1] / closes.iloc[-sessions - 1] - 1) * 100)
+    return output
 
 
 def _filter_fundamentals(
@@ -172,6 +195,29 @@ def _filter_volume(
     return output
 
 
+def _filter_performance(
+    frame: pd.DataFrame,
+    config: UniverseFilterConfig,
+) -> pd.DataFrame:
+    output = frame
+    for window, threshold in config.min_performance.items():
+        column = _performance_column(window)
+        if column in output.columns:
+            output = output[output[column] >= threshold]
+
+    if config.performance_windows and config.top_performance_pct is not None:
+        columns = [
+            _performance_column(window)
+            for window in config.performance_windows
+            if _performance_column(window) in output.columns
+        ]
+        if not columns:
+            return output.head(0)
+        ranks = output[columns].rank(pct=True, ascending=False, method="min")
+        output = output[ranks.min(axis=1) <= config.top_performance_pct / 100.0]
+    return output
+
+
 def _apply_cap_mix(
     frame: pd.DataFrame,
     cap_mix: dict[str, float],
@@ -196,6 +242,12 @@ def _apply_cap_mix(
 
 
 def _sort_column(frame: pd.DataFrame) -> str:
+    if "performance_3m_pct" in frame.columns:
+        return "performance_3m_pct"
+    if "performance_1m_pct" in frame.columns:
+        return "performance_1m_pct"
+    if "performance_6m_pct" in frame.columns:
+        return "performance_6m_pct"
     if "dollar_volume_30d" in frame.columns:
         return "dollar_volume_30d"
     if "share_volume_30d" in frame.columns:
@@ -240,3 +292,20 @@ def _optional_column(frame: pd.DataFrame, column: str) -> pd.Series:
     if column in frame.columns:
         return frame[column]
     return pd.Series([None] * len(frame), index=frame.index)
+
+
+def _performance_column(window: str) -> str:
+    normalized = window.lower().replace("_", "").replace("-", "")
+    aliases = {
+        "1": "1m",
+        "1m": "1m",
+        "1month": "1m",
+        "3": "3m",
+        "3m": "3m",
+        "3month": "3m",
+        "6": "6m",
+        "6m": "6m",
+        "6month": "6m",
+    }
+    label = aliases.get(normalized, normalized)
+    return f"performance_{label}_pct"

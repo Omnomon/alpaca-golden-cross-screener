@@ -70,6 +70,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-30d-share-volume", type=float)
     parser.add_argument("--min-30d-dollar-volume", type=float)
     parser.add_argument(
+        "--performance-windows",
+        default="",
+        help="Comma-separated performance windows to rank: 1m,3m,6m.",
+    )
+    parser.add_argument(
+        "--top-performance-pct",
+        type=float,
+        help="Keep stocks in the top N percent for any selected performance window.",
+    )
+    parser.add_argument(
+        "--min-performance",
+        default="",
+        help="Comma-separated thresholds such as 3m:25,6m:40.",
+    )
+    parser.add_argument(
         "--max-filtered-symbols",
         type=int,
         help="Cap the filtered universe before fetching full strategy bars.",
@@ -148,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
             cap_mix=_parse_cap_mix(args.cap_mix),
             min_30d_share_volume=args.min_30d_share_volume,
             min_30d_dollar_volume=args.min_30d_dollar_volume,
+            performance_windows=_parse_csv(args.performance_windows),
+            top_performance_pct=args.top_performance_pct,
+            min_performance=_parse_performance_thresholds(args.min_performance),
             max_symbols=args.max_filtered_symbols,
         )
         clock = trading_client.get_clock()
@@ -236,6 +254,16 @@ def _parse_cap_mix(value: str) -> dict[str, float]:
     return cap_mix
 
 
+def _parse_performance_thresholds(value: str) -> dict[str, float]:
+    thresholds: dict[str, float] = {}
+    for item in _parse_csv(value):
+        if ":" not in item:
+            raise ValueError("--min-performance entries must look like 3m:25")
+        window, threshold = item.split(":", 1)
+        thresholds[window.strip().lower()] = float(threshold)
+    return thresholds
+
+
 def _volume_spike_pct(args: argparse.Namespace) -> float:
     if args.volume_multiplier is not None:
         return (args.volume_multiplier - 1.0) * 100.0
@@ -250,7 +278,12 @@ def _filter_symbols(
     feed: DataFeed,
     incomplete_session_date: object,
 ) -> list[str]:
-    if not (config.needs_fundamentals or config.needs_volume or config.max_symbols):
+    if not (
+        config.needs_fundamentals
+        or config.needs_volume
+        or config.needs_performance
+        or config.max_symbols
+    ):
         return symbols
 
     fundamentals = None
@@ -262,11 +295,11 @@ def _filter_symbols(
             )
         fundamentals = load_fundamentals_file(str(config.fundamentals_file))
     volume_stats = None
-    if config.needs_volume:
+    if config.needs_volume or config.needs_performance:
         volume_bars = fetch_daily_bars(
             data_client,
             symbols,
-            calendar_days=50,
+            calendar_days=210,
             feed=feed,
             incomplete_session_date=incomplete_session_date,
         )

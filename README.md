@@ -61,6 +61,9 @@ alpaca-golden-cross `
   --pe-max 35 `
   --industries Semiconductors,Technology `
   --market-caps mid,large `
+  --performance-windows 1m,3m,6m `
+  --top-performance-pct 2 `
+  --min-performance 3m:25 `
   --cap-mix mid:40,large:60 `
   --min-30d-dollar-volume 500000000 `
   --max-filtered-symbols 100 `
@@ -101,6 +104,12 @@ Universe filters:
   `small:20,mid:30,large:50`.
 - `--min-30d-share-volume`: minimum shares traded over the last 30 bars.
 - `--min-30d-dollar-volume`: minimum dollar volume over the last 30 bars.
+- `--performance-windows`: rank by recent performance windows: `1m`, `3m`,
+  `6m`.
+- `--top-performance-pct`: keep stocks in the top N percent of selected
+  performance windows, for example `2` for top 2%.
+- `--min-performance`: require a minimum return by window, for example
+  `3m:25` keeps stocks up more than 25% over roughly 3 months.
 - `--max-filtered-symbols`: cap the filtered universe before full screening.
 - `--include-non-common`: include preferred shares, warrants, and units. By
   default these are excluded to avoid symbols such as `ABR.PRD` and `ACHR.WS`.

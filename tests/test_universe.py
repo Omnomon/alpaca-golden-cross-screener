@@ -6,6 +6,7 @@ from alpaca_screener.universe import (
     is_common_stock_symbol,
     load_fundamentals_file,
     market_cap_bucket,
+    performance_from_bars,
     volume_stats_from_bars,
 )
 
@@ -103,6 +104,50 @@ def test_volume_stats_from_bars_and_volume_filter():
 
     assert symbols == ["AAA"]
     assert volume_stats.loc[volume_stats["symbol"] == "AAA", "share_volume_30d"].iloc[0] == 30_000
+
+
+def test_performance_from_bars_calculates_1_3_6_month_returns():
+    dates = pd.bdate_range("2026-01-01", periods=140)
+    closes = pd.Series(range(100, 240), index=dates)
+    bars = pd.DataFrame({"close": closes, "volume": 1000}, index=dates)
+
+    performance = performance_from_bars(bars)
+
+    assert round(performance["performance_1m_pct"], 2) == round((239 / 218 - 1) * 100, 2)
+    assert round(performance["performance_3m_pct"], 2) == round((239 / 176 - 1) * 100, 2)
+    assert round(performance["performance_6m_pct"], 2) == round((239 / 113 - 1) * 100, 2)
+
+
+def test_min_performance_filter_uses_requested_window():
+    volume_stats = pd.DataFrame(
+        [
+            {"symbol": "AAA", "performance_3m_pct": 30},
+            {"symbol": "BBB", "performance_3m_pct": 10},
+        ]
+    )
+    config = UniverseFilterConfig(min_performance={"3m": 25})
+
+    symbols = filter_universe(["AAA", "BBB"], config, volume_stats=volume_stats)
+
+    assert symbols == ["AAA"]
+
+
+def test_top_performance_percent_keeps_strongest_names():
+    volume_stats = pd.DataFrame(
+        [
+            {"symbol": f"S{i:02d}", "performance_3m_pct": 100 - i}
+            for i in range(100)
+        ]
+    )
+    symbols = [f"S{i:02d}" for i in range(100)]
+    config = UniverseFilterConfig(
+        performance_windows=("3m",),
+        top_performance_pct=2,
+    )
+
+    filtered = filter_universe(symbols, config, volume_stats=volume_stats)
+
+    assert filtered == ["S00", "S01"]
 
 
 def test_cap_mix_selects_by_percentage_and_volume():
