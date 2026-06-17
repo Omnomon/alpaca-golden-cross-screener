@@ -81,7 +81,7 @@ def fetch_daily_bars(
     data_client: StockHistoricalDataClient,
     symbols: Iterable[str],
     *,
-    calendar_days: int = 420,
+    calendar_days: int = 2000,
     batch_size: int = 200,
     feed: "DataFeed | None" = None,
     incomplete_session_date: date | None = None,

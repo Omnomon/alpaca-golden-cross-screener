@@ -1,73 +1,60 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pandas as pd
 
 
-SUPPORT_MODE_LOOKBACKS = {
-    "1_month_low": 21,
-    "3_month_low": 63,
-    "6_month_low": 126,
-    "1_year_low": 252,
-}
-
-
 @dataclass(frozen=True)
 class ScreenConfig:
-    fast_window: int = 50
-    slow_window: int = 200
-    ma_type: str = "sma"
-    crossover_lookback: int = 5
-    volume_window: int = 20
-    volume_spike_lookback: int = 3
-    volume_spike_pct: float = 50.0
-    support_lookback: int = 90
-    support_pivot_span: int = 3
-    support_modes: tuple[str, ...] = ("pivot", "recent_low", "1_month_low")
-    support_lookbacks: tuple[int, ...] = field(default_factory=tuple)
+    ema_fast_window: int = 50
+    ema_slow_window: int = 200
+    sma_fast_window: int = 50
+    sma_slow_window: int = 200
+    ao_fast_window: int = 5
+    ao_slow_window: int = 34
+    ao_min: float = 0.5
+    volume_change_pct: float = 5.0
+    low_near_short_weeks: int = 13
+    low_near_long_weeks: int = 26
+    low_near_min_pct: float = 0.0
+    low_near_max_pct: float = 3.0
+    uo_short_window: int = 7
+    uo_medium_window: int = 14
+    uo_long_window: int = 28
+    uo_cross_level: float = 50.0
+    require_uo_cross_up: bool = True
     min_price: float = 5.0
-    min_average_volume: float = 100_000.0
+    min_weekly_volume: float = 100_000.0
 
     @property
     def minimum_bars(self) -> int:
-        support_windows = [self.support_lookback, *self.support_lookbacks]
-        support_windows.extend(
-            SUPPORT_MODE_LOOKBACKS[mode]
-            for mode in self.support_modes
-            if mode in SUPPORT_MODE_LOOKBACKS
-        )
         return max(
-            self.slow_window + self.crossover_lookback,
-            max(support_windows, default=self.support_lookback)
-            + self.support_pivot_span,
-            self.volume_window + self.volume_spike_lookback,
-        )
-
-    @property
-    def volume_multiplier(self) -> float:
-        return 1.0 + self.volume_spike_pct / 100.0
+            self.ema_slow_window,
+            self.sma_slow_window,
+            self.ao_slow_window,
+            self.uo_long_window + 1,
+            self.low_near_long_weeks,
+        ) + 2
 
 
 RESULT_COLUMNS = [
     "symbol",
     "as_of",
     "close",
-    "ma_type",
-    "ma_fast",
-    "ma_slow",
-    "cross_date",
-    "sessions_since_cross",
+    "ema_fast",
+    "ema_slow",
+    "sma_fast",
+    "sma_slow",
+    "ao",
     "volume",
-    "average_volume",
-    "volume_ratio",
-    "volume_spike_date",
-    "volume_spike_pct",
-    "support",
-    "support_date",
-    "support_label",
-    "distance_to_support_pct",
-    "price_above_slow_ma_pct",
+    "previous_volume",
+    "volume_change_pct",
+    "low_3m",
+    "low_6m",
+    "low_3m_above_6m_pct",
+    "uo",
+    "previous_uo",
     "score",
 ]
 
@@ -77,77 +64,104 @@ def analyze_symbol(
     bars: pd.DataFrame,
     config: ScreenConfig,
 ) -> dict[str, object] | None:
-    required = {"close", "low", "volume"}
+    required = {"open", "high", "low", "close", "volume"}
     if not required.issubset(bars.columns):
         missing = ", ".join(sorted(required - set(bars.columns)))
         raise ValueError(f"{symbol}: missing required columns: {missing}")
 
-    frame = bars.sort_index().copy()
-    frame = frame.loc[:, ["close", "low", "volume"]].dropna()
-    if len(frame) < config.minimum_bars:
+    weekly = _to_weekly_bars(bars)
+    if len(weekly) < config.minimum_bars:
         return None
 
-    frame["ma_fast"] = _moving_average(frame["close"], config.fast_window, config.ma_type)
-    frame["ma_slow"] = _moving_average(frame["close"], config.slow_window, config.ma_type)
-    frame["average_volume"] = (
-        frame["volume"].shift(1).rolling(config.volume_window).mean()
+    weekly["ema_fast"] = weekly["close"].ewm(
+        span=config.ema_fast_window,
+        adjust=False,
+        min_periods=config.ema_fast_window,
+    ).mean()
+    weekly["ema_slow"] = weekly["close"].ewm(
+        span=config.ema_slow_window,
+        adjust=False,
+        min_periods=config.ema_slow_window,
+    ).mean()
+    weekly["sma_fast"] = weekly["close"].rolling(config.sma_fast_window).mean()
+    weekly["sma_slow"] = weekly["close"].rolling(config.sma_slow_window).mean()
+    weekly["ao"] = _awesome_oscillator(
+        weekly,
+        config.ao_fast_window,
+        config.ao_slow_window,
     )
-    frame["golden_cross"] = (
-        (frame["ma_fast"] > frame["ma_slow"])
-        & (frame["ma_fast"].shift(1) <= frame["ma_slow"].shift(1))
+    weekly["uo"] = _ultimate_oscillator(
+        weekly,
+        config.uo_short_window,
+        config.uo_medium_window,
+        config.uo_long_window,
     )
 
-    recent = frame.tail(config.crossover_lookback + 1)
-    crosses = recent.index[recent["golden_cross"].fillna(False)]
-    if len(crosses) == 0:
+    latest = weekly.iloc[-1]
+    previous = weekly.iloc[-2]
+    low_3m = float(weekly["low"].tail(config.low_near_short_weeks).min())
+    low_6m = float(weekly["low"].tail(config.low_near_long_weeks).min())
+    low_3m_above_6m_pct = (low_3m / low_6m - 1.0) * 100.0 if low_6m > 0 else None
+    volume_change_pct = (
+        (latest["volume"] / previous["volume"] - 1.0) * 100.0
+        if previous["volume"] > 0
+        else None
+    )
+
+    values = [
+        latest["ema_fast"],
+        latest["ema_slow"],
+        latest["sma_fast"],
+        latest["sma_slow"],
+        latest["ao"],
+        latest["uo"],
+        previous["uo"],
+        volume_change_pct,
+        low_3m_above_6m_pct,
+    ]
+    if any(pd.isna(value) for value in values):
         return None
 
-    spike = _best_recent_volume_spike(frame, config)
-    if spike is None:
-        return None
-    volume_ratio, volume_spike_date, spike_volume, spike_average_volume = spike
-    latest = frame.iloc[-1]
-    if (
-        latest["ma_fast"] <= latest["ma_slow"]
-        or latest["close"] < config.min_price
-        or spike_average_volume < config.min_average_volume
-        or volume_ratio < config.volume_multiplier
+    uo_passes = latest["uo"] >= config.uo_cross_level
+    if config.require_uo_cross_up:
+        uo_passes = uo_passes and previous["uo"] < config.uo_cross_level
+
+    if not (
+        latest["ema_fast"] > latest["ema_slow"]
+        and latest["sma_fast"] > latest["sma_slow"]
+        and latest["ao"] > config.ao_min
+        and volume_change_pct > config.volume_change_pct
+        and config.low_near_min_pct <= low_3m_above_6m_pct <= config.low_near_max_pct
+        and uo_passes
+        and latest["close"] >= config.min_price
+        and latest["volume"] >= config.min_weekly_volume
     ):
         return None
 
-    cross_date = crosses[-1]
-    cross_position = frame.index.get_loc(cross_date)
-    sessions_since_cross = len(frame) - 1 - int(cross_position)
-    support, support_date, support_label = _closest_support(frame, config)
-    distance_to_support_pct = float((latest["close"] / support - 1.0) * 100.0)
-    price_above_slow_ma_pct = float(
-        (latest["close"] / latest["ma_slow"] - 1.0) * 100.0
-    )
     score = (
-        volume_ratio * 10.0
-        + max(0, config.crossover_lookback - sessions_since_cross)
-        + max(0.0, price_above_slow_ma_pct)
+        float(latest["ao"])
+        + float(volume_change_pct)
+        + max(0.0, float(latest["uo"]) - config.uo_cross_level)
+        - float(low_3m_above_6m_pct)
     )
 
     return {
         "symbol": symbol,
-        "as_of": _date_string(frame.index[-1]),
+        "as_of": _date_string(weekly.index[-1]),
         "close": round(float(latest["close"]), 2),
-        "ma_type": config.ma_type.upper(),
-        "ma_fast": round(float(latest["ma_fast"]), 2),
-        "ma_slow": round(float(latest["ma_slow"]), 2),
-        "cross_date": _date_string(cross_date),
-        "sessions_since_cross": sessions_since_cross,
-        "volume": int(spike_volume),
-        "average_volume": round(float(spike_average_volume), 0),
-        "volume_ratio": round(volume_ratio, 2),
-        "volume_spike_date": _date_string(volume_spike_date),
-        "volume_spike_pct": round((volume_ratio - 1.0) * 100.0, 2),
-        "support": round(float(support), 2),
-        "support_date": _date_string(support_date),
-        "support_label": support_label,
-        "distance_to_support_pct": round(distance_to_support_pct, 2),
-        "price_above_slow_ma_pct": round(price_above_slow_ma_pct, 2),
+        "ema_fast": round(float(latest["ema_fast"]), 2),
+        "ema_slow": round(float(latest["ema_slow"]), 2),
+        "sma_fast": round(float(latest["sma_fast"]), 2),
+        "sma_slow": round(float(latest["sma_slow"]), 2),
+        "ao": round(float(latest["ao"]), 2),
+        "volume": int(latest["volume"]),
+        "previous_volume": int(previous["volume"]),
+        "volume_change_pct": round(float(volume_change_pct), 2),
+        "low_3m": round(low_3m, 2),
+        "low_6m": round(low_6m, 2),
+        "low_3m_above_6m_pct": round(float(low_3m_above_6m_pct), 2),
+        "uo": round(float(latest["uo"]), 2),
+        "previous_uo": round(float(previous["uo"]), 2),
         "score": round(score, 2),
     }
 
@@ -166,120 +180,63 @@ def screen_bars(
         return pd.DataFrame(columns=RESULT_COLUMNS)
     return (
         pd.DataFrame(matches, columns=RESULT_COLUMNS)
-        .sort_values(
-            ["distance_to_support_pct", "sessions_since_cross", "volume_ratio"],
-            ascending=[True, True, False],
-        )
+        .sort_values(["score", "volume_change_pct", "ao"], ascending=False)
         .reset_index(drop=True)
     )
 
 
-def _moving_average(prices: pd.Series, window: int, ma_type: str) -> pd.Series:
-    normalized = ma_type.lower()
-    if normalized == "sma":
-        return prices.rolling(window).mean()
-    if normalized == "ema":
-        return prices.ewm(span=window, adjust=False, min_periods=window).mean()
-    raise ValueError("ma_type must be 'sma' or 'ema'")
-
-
-def _best_recent_volume_spike(
-    frame: pd.DataFrame,
-    config: ScreenConfig,
-) -> tuple[float, object, float, float] | None:
-    recent = frame.tail(config.volume_spike_lookback)
-    candidates = recent[recent["average_volume"].notna() & (recent["average_volume"] > 0)]
-    if candidates.empty:
-        return None
-    ratios = candidates["volume"] / candidates["average_volume"]
-    spike_date = ratios.idxmax()
-    return (
-        float(ratios.loc[spike_date]),
-        spike_date,
-        float(candidates.loc[spike_date, "volume"]),
-        float(candidates.loc[spike_date, "average_volume"]),
+def _to_weekly_bars(bars: pd.DataFrame) -> pd.DataFrame:
+    frame = bars.sort_index().copy()
+    frame.index = pd.DatetimeIndex(frame.index)
+    weekly = frame.resample("W-FRI").agg(
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
     )
+    return weekly.dropna()
 
 
-def _closest_support(
+def _awesome_oscillator(
     frame: pd.DataFrame,
-    config: ScreenConfig,
-) -> tuple[float, object, str]:
-    latest_close = float(frame["close"].iloc[-1])
-    supports = _support_candidates(frame, config)
-    valid_supports = [
-        support
-        for support in supports
-        if support[0] > 0 and support[0] <= latest_close
-    ]
-    if not valid_supports:
-        support_date = frame["low"].idxmin()
-        return float(frame.loc[support_date, "low"]), support_date, "all_time_low"
-
-    return min(valid_supports, key=lambda item: latest_close / item[0] - 1.0)
+    fast_window: int,
+    slow_window: int,
+) -> pd.Series:
+    median_price = (frame["high"] + frame["low"]) / 2.0
+    return median_price.rolling(fast_window).mean() - median_price.rolling(
+        slow_window
+    ).mean()
 
 
-def _support_candidates(
+def _ultimate_oscillator(
     frame: pd.DataFrame,
-    config: ScreenConfig,
-) -> list[tuple[float, object, str]]:
-    candidates: list[tuple[float, object, str]] = []
-    modes = tuple(mode.lower() for mode in config.support_modes)
+    short_window: int,
+    medium_window: int,
+    long_window: int,
+) -> pd.Series:
+    previous_close = frame["close"].shift(1)
+    low_or_previous_close = pd.concat(
+        [frame["low"], previous_close], axis=1
+    ).min(axis=1)
+    high_or_previous_close = pd.concat(
+        [frame["high"], previous_close], axis=1
+    ).max(axis=1)
+    buying_pressure = frame["close"] - low_or_previous_close
+    true_range = high_or_previous_close - low_or_previous_close
 
-    if "pivot" in modes:
-        candidates.append(_pivot_support(frame, config))
-    if "recent_low" in modes:
-        candidates.append(_period_low_support(frame, config.support_lookback, "recent_low"))
-
-    for mode in modes:
-        if mode in SUPPORT_MODE_LOOKBACKS:
-            candidates.append(
-                _period_low_support(frame, SUPPORT_MODE_LOOKBACKS[mode], mode)
-            )
-
-    for lookback in config.support_lookbacks:
-        candidates.append(
-            _period_low_support(frame, lookback, f"{lookback}_bar_low")
-        )
-
-    return candidates
-
-
-def _pivot_support(
-    frame: pd.DataFrame,
-    config: ScreenConfig,
-) -> tuple[float, object, str]:
-    recent = frame.tail(config.support_lookback)
-    pivot_lows = _pivot_lows(recent["low"], config.support_pivot_span)
-    latest_close = float(frame["close"].iloc[-1])
-    valid_supports = pivot_lows[pivot_lows <= latest_close]
-
-    if not valid_supports.empty:
-        support_date = valid_supports.index[-1]
-        return float(valid_supports.iloc[-1]), support_date, "pivot"
-
-    return _period_low_support(frame, config.support_lookback, "pivot_fallback_low")
-
-
-def _period_low_support(
-    frame: pd.DataFrame,
-    lookback: int,
-    label: str,
-) -> tuple[float, object, str]:
-    recent = frame.tail(lookback)
-    latest_close = float(frame["close"].iloc[-1])
-    below_close = recent["low"][recent["low"] <= latest_close]
-    support_series = below_close if not below_close.empty else recent["low"]
-    support_date = support_series.idxmin()
-    return float(support_series.loc[support_date]), support_date, label
-
-
-def _pivot_lows(lows: pd.Series, span: int) -> pd.Series:
-    if span < 1:
-        return lows
-    rolling_window = span * 2 + 1
-    centered_min = lows.rolling(rolling_window, center=True).min()
-    return lows[(lows == centered_min) & centered_min.notna()]
+    average_short = buying_pressure.rolling(short_window).sum() / true_range.rolling(
+        short_window
+    ).sum()
+    average_medium = buying_pressure.rolling(medium_window).sum() / true_range.rolling(
+        medium_window
+    ).sum()
+    average_long = buying_pressure.rolling(long_window).sum() / true_range.rolling(
+        long_window
+    ).sum()
+    return 100.0 * (4.0 * average_short + 2.0 * average_medium + average_long) / 7.0
 
 
 def _date_string(value: object) -> str:

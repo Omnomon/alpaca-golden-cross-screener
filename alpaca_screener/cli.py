@@ -4,9 +4,6 @@ import argparse
 import sys
 from pathlib import Path
 
-from alpaca.data.enums import DataFeed
-from dotenv import load_dotenv
-
 from .alpaca_data import (
     DEFAULT_EXCHANGES,
     clients_from_environment,
@@ -25,7 +22,10 @@ from .universe import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Find recent golden crosses confirmed by a volume spike."
+        description=(
+            "Screen weekly technical strength: EMA/SMA 50 > 200, AO, volume "
+            "change, nearby 3M/6M lows, and UO confirmation."
+        )
     )
     universe = parser.add_mutually_exclusive_group()
     universe.add_argument(
@@ -95,56 +95,49 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Cap the filtered universe before fetching full strategy bars.",
     )
-    parser.add_argument("--fast-window", type=int, default=50)
-    parser.add_argument("--slow-window", type=int, default=200)
+    parser.add_argument("--ema-fast-window", type=int, default=50)
+    parser.add_argument("--ema-slow-window", type=int, default=200)
+    parser.add_argument("--sma-fast-window", type=int, default=50)
+    parser.add_argument("--sma-slow-window", type=int, default=200)
+    parser.add_argument("--ao-fast-window", type=int, default=5)
+    parser.add_argument("--ao-slow-window", type=int, default=34)
     parser.add_argument(
-        "--ma-type",
-        choices=["sma", "ema"],
-        default="sma",
-        help="Moving average type for the golden cross.",
-    )
-    parser.add_argument("--cross-lookback", type=int, default=5)
-    parser.add_argument("--volume-window", type=int, default=20)
-    parser.add_argument(
-        "--volume-spike-lookback",
-        type=int,
-        default=3,
-        help="Recent bars to inspect for a qualifying volume spike.",
-    )
-    parser.add_argument(
-        "--volume-spike-pct",
+        "--ao-min",
         type=float,
-        default=50.0,
-        help="Target percent volume spike versus trailing average volume.",
-    )
-    parser.add_argument("--volume-multiplier", type=float, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--support-lookback",
-        type=int,
-        default=90,
-        help="Bars to inspect for the most recent support pivot.",
+        default=0.5,
+        help="Minimum weekly Awesome Oscillator value.",
     )
     parser.add_argument(
-        "--support-modes",
-        default="pivot,recent_low,1_month_low",
-        help=(
-            "Comma-separated support methods: pivot, recent_low, 1_month_low, "
-            "3_month_low, 6_month_low, 1_year_low."
-        ),
+        "--volume-change-pct",
+        type=float,
+        default=5.0,
+        help="Minimum latest weekly volume increase versus the prior week.",
+    )
+    parser.add_argument("--low-near-short-weeks", type=int, default=13)
+    parser.add_argument("--low-near-long-weeks", type=int, default=26)
+    parser.add_argument(
+        "--low-near-min-pct",
+        type=float,
+        default=0.0,
+        help="Minimum percent that the short-window low is above the long-window low.",
     )
     parser.add_argument(
-        "--support-lookbacks",
-        default="",
-        help="Comma-separated custom low lookbacks, for example 21,63,126.",
+        "--low-near-max-pct",
+        type=float,
+        default=3.0,
+        help="Maximum percent that the short-window low is above the long-window low.",
     )
+    parser.add_argument("--uo-short-window", type=int, default=7)
+    parser.add_argument("--uo-medium-window", type=int, default=14)
+    parser.add_argument("--uo-long-window", type=int, default=28)
+    parser.add_argument("--uo-cross-level", type=float, default=50.0)
     parser.add_argument(
-        "--support-pivot-span",
-        type=int,
-        default=3,
-        help="Bars required on each side of a local support pivot.",
+        "--no-require-uo-cross-up",
+        action="store_true",
+        help="Accept UO above the level without requiring a fresh upward cross.",
     )
     parser.add_argument("--min-price", type=float, default=5.0)
-    parser.add_argument("--min-average-volume", type=float, default=100_000.0)
+    parser.add_argument("--min-weekly-volume", type=float, default=100_000.0)
     parser.add_argument("--feed", choices=["iex", "sip"], default="iex")
     parser.add_argument("--top", type=int, default=25)
     parser.add_argument("--output", type=Path, help="Write results to .csv or .json.")
@@ -153,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    load_dotenv()
+    _load_dotenv()
 
     try:
         data_client, trading_client = clients_from_environment()
@@ -179,13 +172,13 @@ def main(argv: list[str] | None = None) -> int:
             data_client,
             symbols,
             universe_config,
-            feed=DataFeed.SIP if args.feed == "sip" else DataFeed.IEX,
+            feed=_data_feed(args.feed),
             incomplete_session_date=clock.timestamp.date() if clock.is_open else None,
         )
         bars = fetch_daily_bars(
             data_client,
             symbols,
-            feed=DataFeed.SIP if args.feed == "sip" else DataFeed.IEX,
+            feed=_data_feed(args.feed),
             incomplete_session_date=clock.timestamp.date() if clock.is_open else None,
         )
     except Exception as exc:
@@ -193,19 +186,25 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     config = ScreenConfig(
-        fast_window=args.fast_window,
-        slow_window=args.slow_window,
-        ma_type=args.ma_type,
-        crossover_lookback=args.cross_lookback,
-        volume_window=args.volume_window,
-        volume_spike_lookback=args.volume_spike_lookback,
-        volume_spike_pct=_volume_spike_pct(args),
-        support_lookback=args.support_lookback,
-        support_pivot_span=args.support_pivot_span,
-        support_modes=_parse_csv(args.support_modes),
-        support_lookbacks=tuple(int(item) for item in _parse_csv(args.support_lookbacks)),
+        ema_fast_window=args.ema_fast_window,
+        ema_slow_window=args.ema_slow_window,
+        sma_fast_window=args.sma_fast_window,
+        sma_slow_window=args.sma_slow_window,
+        ao_fast_window=args.ao_fast_window,
+        ao_slow_window=args.ao_slow_window,
+        ao_min=args.ao_min,
+        volume_change_pct=args.volume_change_pct,
+        low_near_short_weeks=args.low_near_short_weeks,
+        low_near_long_weeks=args.low_near_long_weeks,
+        low_near_min_pct=args.low_near_min_pct,
+        low_near_max_pct=args.low_near_max_pct,
+        uo_short_window=args.uo_short_window,
+        uo_medium_window=args.uo_medium_window,
+        uo_long_window=args.uo_long_window,
+        uo_cross_level=args.uo_cross_level,
+        require_uo_cross_up=not args.no_require_uo_cross_up,
         min_price=args.min_price,
-        min_average_volume=args.min_average_volume,
+        min_weekly_volume=args.min_weekly_volume,
     )
     results = screen_bars(bars, config).head(args.top)
 
@@ -213,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_results(results, args.output)
 
     if results.empty:
-        print("No symbols matched the golden-cross and volume-spike criteria.")
+        print("No symbols matched the weekly technical strategy criteria.")
     else:
         print(results.to_string(index=False))
     print(f"\nScreened {len(bars)} symbols with sufficient Alpaca bar data.")
@@ -271,10 +270,18 @@ def _parse_performance_thresholds(value: str) -> dict[str, float]:
     return thresholds
 
 
-def _volume_spike_pct(args: argparse.Namespace) -> float:
-    if args.volume_multiplier is not None:
-        return (args.volume_multiplier - 1.0) * 100.0
-    return args.volume_spike_pct
+def _data_feed(value: str) -> object:
+    from alpaca.data.enums import DataFeed
+
+    return DataFeed.SIP if value == "sip" else DataFeed.IEX
+
+
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv()
 
 
 def _filter_symbols(
@@ -282,7 +289,7 @@ def _filter_symbols(
     symbols: list[str],
     config: UniverseFilterConfig,
     *,
-    feed: DataFeed,
+    feed: object,
     incomplete_session_date: object,
 ) -> list[str]:
     if not (

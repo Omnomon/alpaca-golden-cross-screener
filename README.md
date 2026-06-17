@@ -1,24 +1,21 @@
-# Alpaca Golden Cross Stock Screener
+# Alpaca Weekly Technical Stock Screener
 
 This project adapts the indicator-dataframe approach from
 [`jbpayton/langchain-stock-screener`](https://github.com/jbpayton/langchain-stock-screener)
 into a focused, deterministic Alpaca Markets screener.
 
-It finds stocks where:
+It screens weekly setups where:
 
-1. The configurable fast moving average crossed above the configurable slow
-   moving average within the last `N` completed bars.
-2. The moving-average type can be simple (`SMA`) or exponential (`EMA`).
-3. Volume spiked by at least the target percentage on one of the last 3 bars
-   versus its trailing average volume.
-4. The bullish fast/slow moving-average alignment is still intact.
-5. Support can be calculated from pivot lows, recent lows, monthly lows, or a
-   custom list of lookback windows.
-6. Basic price and average-volume liquidity filters pass.
+1. Weekly `EMA(50) > EMA(200)`.
+2. Weekly `SMA(50) > SMA(200)`.
+3. Weekly Awesome Oscillator is above `0.5`.
+4. Latest weekly volume is more than `5%` above the prior week.
+5. The 3-month low is above the 6-month low by `0%` to `3%`.
+6. Ultimate Oscillator `(7, 14, 28)` crosses upward through `50`.
 
-The volume baseline excludes the current bar so the spike does not inflate its
-own comparison. When Alpaca reports that the market is open, the current
-in-progress daily bar is excluded entirely.
+All strategy thresholds are configurable from the CLI, notebook, or Python API.
+When Alpaca reports that the market is open, the current in-progress daily bar is
+excluded before weekly bars are built.
 
 ## Setup
 
@@ -46,16 +43,13 @@ Screen a watchlist using Alpaca's free IEX feed:
 alpaca-golden-cross --symbols AAPL,MSFT,NVDA,AMD,AMZN
 ```
 
-Screen all active, tradable US equities:
+Screen all active, tradable NASDAQ and NYSE common stocks:
 
 ```powershell
 alpaca-golden-cross --top 25 --output outputs/screen-results.csv
 ```
 
-By default, the generated universe is limited to active tradable NASDAQ and
-NYSE common stocks.
-
-Use a symbol file and stricter confirmation:
+Use a symbol file and stricter universe filters:
 
 ```powershell
 alpaca-golden-cross `
@@ -70,26 +64,32 @@ alpaca-golden-cross `
   --cap-mix mid:40,large:60 `
   --min-30d-dollar-volume 500000000 `
   --max-filtered-symbols 100 `
-  --fast-window 21 `
-  --slow-window 50 `
-  --ma-type ema `
-  --cross-lookback 3 `
-  --volume-spike-pct 100 `
-  --volume-spike-lookback 3 `
-  --support-modes pivot,recent_low,1_month_low,3_month_low `
-  --support-lookback 120 `
-  --support-lookbacks 21,63,126 `
-  --min-average-volume 500000 `
+  --ema-fast-window 50 `
+  --ema-slow-window 200 `
+  --sma-fast-window 50 `
+  --sma-slow-window 200 `
+  --ao-min 0.5 `
+  --volume-change-pct 5 `
+  --low-near-min-pct 0 `
+  --low-near-max-pct 3 `
+  --uo-cross-level 50 `
+  --min-weekly-volume 500000 `
   --output outputs/screen-results.json
 ```
 
 Use `--feed sip` only when the Alpaca account has SIP data access.
 
+## Universe Filters
+
+By default, generated universes are limited to active tradable NASDAQ and NYSE
+common stocks. Preferred shares, warrants, and units are excluded to avoid noisy
+symbols such as `ABR.PRD` and `ACHR.WS`.
+
 Alpaca bars/assets data does not include P/E, market cap, or industry, and this
 project intentionally avoids per-symbol `yfinance` calls because they rate limit
-quickly and return noisy blanks for preferred shares and warrants. Fundamental
-filters use a local CSV supplied with `--fundamentals-file`; thirty-day traded
-volume is calculated from Alpaca daily bars before the full strategy fetch.
+quickly and return noisy blanks. Fundamental filters use a local CSV supplied
+with `--fundamentals-file`; 30-day traded volume and recent performance are
+calculated from Alpaca daily bars before the full strategy fetch.
 
 Fundamentals CSV columns:
 
@@ -98,7 +98,7 @@ Fundamentals CSV columns:
 - Accepted aliases include `ticker`, `pe_ratio`, `trailing_pe`, `forward_pe`,
   `marketCap`, `market_capitalization`, and `cap_bucket`.
 
-Universe filters:
+Universe options:
 
 - `--pe-min`, `--pe-max`: trailing P/E range.
 - `--industries`: comma-separated industry or sector names.
@@ -114,10 +114,27 @@ Universe filters:
 - `--min-performance`: require a minimum return by window, for example
   `3m:25` keeps stocks up more than 25% over roughly 3 months.
 - `--max-filtered-symbols`: cap the filtered universe before full screening.
-- `--include-non-common`: include preferred shares, warrants, and units. By
-  default these are excluded to avoid symbols such as `ABR.PRD` and `ACHR.WS`.
+- `--include-non-common`: include preferred shares, warrants, and units.
 - `--exchanges`: Alpaca exchange list for generated universes. Defaults to
   `NASDAQ,NYSE`.
+
+## Strategy Options
+
+- `--ema-fast-window`, `--ema-slow-window`: weekly EMA alignment windows.
+- `--sma-fast-window`, `--sma-slow-window`: weekly SMA alignment windows.
+- `--ao-fast-window`, `--ao-slow-window`, `--ao-min`: Awesome Oscillator
+  settings.
+- `--volume-change-pct`: required latest-week volume increase versus the prior
+  week.
+- `--low-near-short-weeks`, `--low-near-long-weeks`: low comparison windows.
+  Defaults to 13 and 26 weeks, roughly 3 and 6 months.
+- `--low-near-min-pct`, `--low-near-max-pct`: allowed distance between the
+  short-window low and long-window low.
+- `--uo-short-window`, `--uo-medium-window`, `--uo-long-window`,
+  `--uo-cross-level`: Ultimate Oscillator settings.
+- `--no-require-uo-cross-up`: accept UO already above the level instead of
+  requiring a fresh upward cross.
+- `--min-price`, `--min-weekly-volume`: liquidity filters.
 
 ## Notebook
 
@@ -130,7 +147,7 @@ jupyter notebook notebooks/alpaca_golden_cross_screener.ipynb
 
 The notebook loads `.env`, lets you configure the watchlist or full universe,
 runs the same package code as the CLI, saves CSV/JSON output to `outputs/`, and
-includes an optional chart for the closest-to-support match.
+includes optional weekly charts for the top match.
 
 If you pull strategy updates while the notebook is already open, restart the
 kernel or rerun the Setup cell before running the configuration cell. The Setup
@@ -138,33 +155,22 @@ cell forces Jupyter to load the local checkout instead of a stale imported copy.
 
 ## Output
 
-Results are sorted by distance to support from closest to furthest. The screener
-can compare multiple support candidates and choose the closest one below the
-latest close:
+Results are sorted by `score` from strongest to weakest. The score favors
+stronger AO, higher weekly volume change, UO strength above the trigger level,
+and lows that are closer to the 6-month low.
 
-- `pivot`: latest local pivot low in `--support-lookback`.
-- `recent_low`: lowest low in `--support-lookback`.
-- `1_month_low`, `3_month_low`, `6_month_low`, `1_year_low`: fixed trading-day
-  low windows.
-- `--support-lookbacks`: custom comma-separated low windows such as
-  `21,63,126`.
-
-The `score` column is still included as a secondary context field favoring
-larger volume spikes, more recent crossovers, and stronger separation above the
-slow moving average.
-
-Important fields include `cross_date`, `sessions_since_cross`,
-`ma_type`, `volume_spike_date`, `volume_spike_pct`, `support`,
-`support_label`, `support_date`, `distance_to_support_pct`, and
-`price_above_slow_ma_pct`.
+Important fields include `ema_fast`, `ema_slow`, `sma_fast`, `sma_slow`, `ao`,
+`volume_change_pct`, `low_3m`, `low_6m`, `low_3m_above_6m_pct`, `uo`,
+`previous_uo`, and `score`.
 
 ## Notes
 
-- The default universe can be several thousand symbols and may take time.
-  Use `--symbols`, `--symbols-file`, or `--limit-universe` while testing.
-- Daily data requires enough history for the 200-day moving average.
+- The default universe can be several thousand symbols and may take time. Use
+  `--symbols`, `--symbols-file`, or `--limit-universe` while testing.
+- The weekly strategy needs enough daily history for 200-week averages, so the
+  default full strategy fetch requests about 2,000 calendar days.
 - This program screens market data only. It does not place orders.
-- A golden cross is a lagging technical signal, not a guarantee of future
+- Technical signals are lagging research filters, not guarantees of future
   performance. This software is for research and education, not financial
   advice.
 
