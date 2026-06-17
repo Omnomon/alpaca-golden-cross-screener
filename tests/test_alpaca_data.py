@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from alpaca_screener.alpaca_data import _include_asset
+from alpaca_screener.alpaca_data import _include_asset, _normalize_exchange
 
 
 def asset(symbol: str, exchange: str, tradable: bool = True) -> SimpleNamespace:
@@ -41,4 +41,15 @@ def test_include_asset_can_accept_custom_exchange_and_non_common():
         asset("ABR.PRD", "NYSE"),
         common_only=False,
         exchanges=("NYSE",),
+    )
+
+
+def test_exchange_normalization_handles_enum_like_values():
+    enum_like = SimpleNamespace(value="NASDAQ")
+    assert _normalize_exchange(enum_like) == "NASDAQ"
+    assert _normalize_exchange("AssetExchange.NYSE") == "NYSE"
+    assert _include_asset(
+        asset("AAPL", enum_like),
+        common_only=True,
+        exchanges=("NASDAQ", "NYSE"),
     )

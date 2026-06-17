@@ -58,8 +58,8 @@ def _include_asset(
     exchanges: tuple[str, ...],
 ) -> bool:
     symbol = getattr(asset, "symbol", "")
-    exchange = str(getattr(asset, "exchange", "") or "").upper()
-    allowed_exchanges = {item.upper() for item in exchanges}
+    exchange = _normalize_exchange(getattr(asset, "exchange", ""))
+    allowed_exchanges = {_normalize_exchange(item) for item in exchanges}
     return (
         bool(getattr(asset, "tradable", False))
         and bool(exchange)
@@ -67,6 +67,14 @@ def _include_asset(
         and (not allowed_exchanges or exchange in allowed_exchanges)
         and (not common_only or is_common_stock_symbol(symbol))
     )
+
+
+def _normalize_exchange(value: object) -> str:
+    raw = getattr(value, "value", value)
+    normalized = str(raw or "").upper()
+    if "." in normalized:
+        normalized = normalized.rsplit(".", 1)[-1]
+    return normalized
 
 
 def fetch_daily_bars(
